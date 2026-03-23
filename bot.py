@@ -9,7 +9,7 @@ bot = Bot(TOKEN)
 dp = Dispatcher(bot)
 
 # ====== СТАРТ с проверкой подписки ======
-@dp.message(commands=["start"])
+@dp.message_handler(commands=["start"])  # ✅ aiogram 2.x
 async def start(msg: types.Message):
     user_id = msg.from_user.id
     try:
