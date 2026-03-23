@@ -6,7 +6,7 @@ from config import TOKEN, ADMIN_ID, CHANNEL_USERNAME
 from db import init_db, get_balance, add_balance, remove_balance
 
 bot = Bot(TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
 # ====== СТАРТ с проверкой подписки ======
 @dp.message(commands=["start"])
