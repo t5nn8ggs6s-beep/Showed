@@ -1,15 +1,21 @@
-# Используем стабильный Python 3.11
-FROM python:3.11-slim
+FROM python:3.11
 
-# Создаём рабочую директорию
+# Установка зависимостей для сборки pydantic-core
+RUN apt-get update && apt-get install -y build-essential curl
+
+# Устанавливаем rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Рабочая папка
 WORKDIR /app
 
 # Копируем файлы проекта
 COPY . /app
 
-# Обновляем pip и устанавливаем зависимости
+# Обновляем pip и ставим зависимости
 RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Команда для запуска бота
+# Запуск бота
 CMD ["python", "bot.py"]
