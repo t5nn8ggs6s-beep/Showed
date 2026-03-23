@@ -1,179 +1,116 @@
-import asyncio, random
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
+import random
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.exceptions import ChatNotFound
 from config import TOKEN, ADMIN_ID, CHANNEL_USERNAME
-from db import init_db, get_balance, add_balance, remove_balance
 
+# ====== ИНИЦИАЛИЗАЦИЯ ======
 bot = Bot(TOKEN)
 dp = Dispatcher(bot)
 
-# ====== СТАРТ с проверкой подписки ======
-@dp.message_handler(commands=["start"])  # ✅ aiogram 2.x
-async def start(msg: types.Message):
-    user_id = msg.from_user.id
+# ====== БАЗА ПОЛЬЗОВАТЕЛЕЙ (звёзды) ======
+users_balance = {}  # user_id: stars
+
+# ====== ПРОВЕРКА ПОДПИСКИ ======
+async def check_subscribed(user_id):
     try:
         member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        if member.status == "left":
-            kb = InlineKeyboardMarkup()
-            kb.add(InlineKeyboardButton("Подписаться на канал", url=f"https://t.me/{CHANNEL_USERNAME[1:]}"))
-            return await msg.answer("❌ Для игры нужно подписаться на канал", reply_markup=kb)
+        return member.status not in ["left", "kicked"]
     except ChatNotFound:
-        return await msg.answer("Ошибка: канал не найден или бот не является админом канала")
-
-    # Если подписан
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("🎰 Играть", "💰 Баланс")
-    kb.add("💳 Пополнить", "💸 Вывод")
-    await msg.answer("Добро пожаловать в StarPlay! ⭐", reply_markup=kb)
-
-# ====== БАЛАНС ======
-@dp.message(lambda m: m.text == "💰 Баланс")
-async def balance(msg: types.Message):
-    bal = await get_balance(msg.from_user.id)
-    await msg.answer(f"Ваш баланс: {bal} ⭐")
-
-# ====== ПОПОЛНЕНИЕ ======
-@dp.message(lambda m: m.text == "💳 Пополнить")
-async def deposit(msg: types.Message):
-    prices = [LabeledPrice("100 Stars", 100)]
-    await bot.send_invoice(
-        msg.chat.id, "Пополнение", "Пополнение баланса", "deposit_100",
-        provider_token="", currency="XTR", prices=prices
-    )
-
-@dp.message(lambda m: m.successful_payment)
-async def payment_success(msg: types.Message):
-    await add_balance(msg.from_user.id, 100)
-    await msg.answer("✅ Баланс пополнен на 100 ⭐")
-
-# ====== ВЫВОД ======
-@dp.message(lambda m: m.text == "💸 Вывод")
-async def withdraw(msg: types.Message):
-    bal = await get_balance(msg.from_user.id)
-    if bal < 500: return await msg.answer("Минимум для вывода 500 ⭐")
-    await msg.answer("Заявка на вывод отправлена администратору")
+        return False
 
 # ====== МЕНЮ ИГР ======
-@dp.message(lambda m: m.text == "🎰 Играть")
-async def menu_games(msg: types.Message):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("🎲 Кубик", "🪙 Монетка")
-    kb.add("🎰 Слоты", "💣 Мины")
-    kb.add("🚀 Rocket", "🎡 Рулетка")
-    kb.add("🃏 Blackjack")
-    await msg.answer("Выбери игру:", reply_markup=kb)
+def games_keyboard():
+    kb = InlineKeyboardMarkup(row_width=2)
+    games = [
+        ("Рулетка", "roulette"), ("Слот", "slot"), ("Баскетбол", "basketball"),
+        ("Футбол", "football"), ("Блекджек", "blackjack"), ("Мины", "mines"),
+        ("Монетка", "coin"), ("Кубик", "dice"), ("Башня", "tower"),
+        ("Боулинг", "bowling"), ("Рокет", "rocket")
+    ]
+    for name, callback in games:
+        kb.insert(InlineKeyboardButton(name, callback_data=callback))
+    return kb
 
-# ====== ИГРЫ ======
-async def play_dice(user_id):
-    bet = 10
-    if await get_balance(user_id) < bet: return "Недостаточно ⭐"
-    await remove_balance(user_id, bet)
-    roll = random.randint(1,6)
-    if roll>=4:
-        win = 20
-        await add_balance(user_id, win)
-        return f"🎲 Выпало {roll}\nТы выиграл {win} ⭐"
-    return f"🎲 Выпало {roll}\nТы проиграл"
+# ====== СТАРТ ======
+@dp.message_handler(commands=["start"])
+async def start(msg: types.Message):
+    user_id = msg.from_user.id
+    if not await check_subscribed(user_id):
+        kb = InlineKeyboardMarkup()
+        kb.add(InlineKeyboardButton(
+            "Подписаться на канал", 
+            url=f"https://t.me/{CHANNEL_USERNAME[1:]}"
+        ))
+        return await msg.answer(
+            "❌ Для игры нужно подписаться на канал", 
+            reply_markup=kb
+        )
 
-async def play_coin(user_id):
-    bet = 10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id, bet)
-    res = random.choice(["Орел", "Решка"])
-    if res=="Орел":
-        win=20
-        await add_balance(user_id,win)
-        return f"🪙 {res}!\nВы выиграли {win} ⭐"
-    return f"🪙 {res}!\nВы проиграли"
+    if user_id not in users_balance:
+        users_balance[user_id] = 1000  # стартовый баланс
 
-async def play_slots(user_id):
-    bet = 10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id, bet)
-    symbols = ["🍒","🍋","🔔","⭐"]
-    spin = [random.choice(symbols) for _ in range(3)]
-    if len(set(spin))==1:
-        win = 50
-        await add_balance(user_id, win)
-        return f"{''.join(spin)}\n🎉 Джекпот! +{win} ⭐"
-    return f"{''.join(spin)}\nПроиграли"
+    await msg.answer(
+        f"✅ Привет! У тебя {users_balance[user_id]} ⭐\nВыбери игру:",
+        reply_markup=games_keyboard()
+    )
 
-async def play_mines(user_id):
-    bet = 10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id,bet)
-    safe = random.randint(1,5)
-    choice = random.randint(1,5)
-    if choice==safe:
-        win=40
-        await add_balance(user_id,win)
-        return f"💣 Мина пропущена! +{win} ⭐"
-    return "💣 Бах! Проиграли"
+# ====== ОБРАБОТКА ИГР ======
+@dp.callback_query_handler(lambda c: True)
+async def game_callback(cq: types.CallbackQuery):
+    user_id = cq.from_user.id
+    game = cq.data
 
-async def play_rocket(user_id):
-    bet=10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id,bet)
-    multiplier = random.uniform(1.0, 10.0)
-    win=int(bet*multiplier)
-    await add_balance(user_id,win)
-    return f"🚀 Rocket взлетел x{multiplier:.2f}! Вы выиграли {win} ⭐"
+    if users_balance.get(user_id, 0) < 50:
+        await cq.answer("Недостаточно звёзд для игры (минимум 50 ⭐)")
+        return
 
-async def play_roulette(user_id):
-    bet=10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id,bet)
-    number=random.randint(0,36)
-    if number%2==0:
-        win=20
-        await add_balance(user_id,win)
-        return f"🎡 Выпало {number} 🎉 Вы выиграли {win} ⭐"
-    return f"🎡 Выпало {number}\nВы проиграли"
+    # Минимальная ставка
+    bet = 50
+    users_balance[user_id] -= bet
 
-async def play_blackjack(user_id):
-    bet=10
-    if await get_balance(user_id)<bet: return "Недостаточно ⭐"
-    await remove_balance(user_id,bet)
-    user_score=random.randint(15,21)
-    dealer_score=random.randint(15,21)
-    if user_score>dealer_score:
-        win=30
-        await add_balance(user_id,win)
-        return f"🃏 Вы: {user_score}, Дилер: {dealer_score}\nВы выиграли {win} ⭐"
-    return f"🃏 Вы: {user_score}, Дилер: {dealer_score}\nВы проиграли"
+    win = 0
+    if game == "roulette":
+        win = bet * random.choice([0, 2])  # 50% шанс удвоить
+    elif game == "slot":
+        win = bet * random.choice([0, 3])
+    elif game == "coin":
+        win = bet * random.choice([0, 2])
+    elif game == "dice":
+        win = bet * random.choice([0, 2])
+    elif game == "basketball":
+        win = bet * random.choice([0, 3])
+    elif game == "football":
+        win = bet * random.choice([0, 3])
+    elif game == "blackjack":
+        win = bet * random.choice([0, 5])
+    elif game == "mines":
+        win = bet * random.choice([0, 4])
+    elif game == "tower":
+        win = bet * random.choice([0, 2])
+    elif game == "bowling":
+        win = bet * random.choice([0, 3])
+    elif game == "rocket":
+        win = bet * random.choice([0, 6])
 
-# ====== КОМАНДЫ ИГР ======
-@dp.message(lambda m: m.text=="🎲 Кубик")
-async def cmd_dice(msg): await msg.answer(await play_dice(msg.from_user.id))
-@dp.message(lambda m: m.text=="🪙 Монетка")
-async def cmd_coin(msg): await msg.answer(await play_coin(msg.from_user.id))
-@dp.message(lambda m: m.text=="🎰 Слоты")
-async def cmd_slots(msg): await msg.answer(await play_slots(msg.from_user.id))
-@dp.message(lambda m: m.text=="💣 Мины")
-async def cmd_mines(msg): await msg.answer(await play_mines(msg.from_user.id))
-@dp.message(lambda m: m.text=="🚀 Rocket")
-async def cmd_rocket(msg): await msg.answer(await play_rocket(msg.from_user.id))
-@dp.message(lambda m: m.text=="🎡 Рулетка")
-async def cmd_roulette(msg): await msg.answer(await play_roulette(msg.from_user.id))
-@dp.message(lambda m: m.text=="🃏 Blackjack")
-async def cmd_blackjack(msg): await msg.answer(await play_blackjack(msg.from_user.id))
+    users_balance[user_id] += win
 
-# ====== АДМИН ======
-@dp.message(lambda m: m.text.startswith("/add"))
-async def admin_add(msg):
-    if msg.from_user.id!=ADMIN_ID: return
-    try:
-        _, uid, amount = msg.text.split()
-        await add_balance(int(uid), int(amount))
-        await msg.answer("Готово")
-    except:
-        await msg.answer("Ошибка")
+    await cq.answer(f"Игра: {game}\nСтавка: {bet} ⭐\nВыигрыш: {win} ⭐\nБаланс: {users_balance[user_id]} ⭐")
 
-# ====== ЗАПУСК ======
-async def main():
-    await init_db()
-    await dp.start_polling(bot)
+# ====== АДМИНКА ======
+@dp.message_handler(commands=["admin"])
+async def admin(msg: types.Message):
+    if msg.from_user.id != ADMIN_ID:
+        return await msg.answer("❌ Доступ запрещён")
+    await msg.answer("✅ Привет, админ! Здесь можно добавлять или снимать звёзды вручную.")
 
-if __name__=="__main__":
-    asyncio.run(main())
+# ====== ВЫВОД БАЛАНСА ======
+@dp.message_handler(commands=["balance"])
+async def balance(msg: types.Message):
+    user_id = msg.from_user.id
+    bal = users_balance.get(user_id, 0)
+    await msg.answer(f"💰 Твой баланс: {bal} ⭐")
+
+# ====== ЗАПУСК БОТА ======
+if __name__ == "__main__":
+    executor.start_polling(dp, skip_updates=True)
